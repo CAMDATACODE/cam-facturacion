@@ -8,4 +8,4 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:17-jre
 COPY --from=build /app/target/cam-facturacion.jar /app.jar
 # El alojamiento define PORT; la aplicación lo lee en application.properties.
-CMD ["java", "-jar", "/app.jar"]
+CMD ["java", "-XX:MaxRAMPercentage=70", "-XX:+UseSerialGC", "-jar", "/app.jar"]
