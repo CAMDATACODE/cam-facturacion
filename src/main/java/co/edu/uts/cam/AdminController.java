@@ -39,10 +39,12 @@ public class AdminController {
                 + " (SELECT COUNT(*) FROM propietarios) AS propietarios,"
                 + " (SELECT COUNT(*) FROM adquisiciones WHERE estado <> 'TRASPASADA') AS semanas_asignadas,"
                 + " (SELECT COUNT(*) FROM semanas) AS semanas,"
-                + " (SELECT COALESCE(SUM(total_abonado), 0) FROM v_estado_cuenta WHERE estado <> 'TRASPASADA') AS recaudado,"
+                // Recaudo y cuotas pagadas cuentan también los pagos de semanas traspasadas: es dinero que sí entró.
+                + " (SELECT COALESCE(SUM(valor), 0) FROM pagos) AS recaudado,"
                 + " (SELECT COALESCE(SUM(saldo), 0) FROM v_estado_cuenta WHERE estado <> 'TRASPASADA') AS saldo,"
-                + " (SELECT CAST(COALESCE(SUM(cuotas_pagadas), 0) AS SIGNED) FROM v_estado_cuenta WHERE estado <> 'TRASPASADA') AS cuotas_pagadas,"
-                + " (SELECT CAST(COALESCE(SUM(num_cuotas), 0) AS SIGNED) FROM v_estado_cuenta WHERE estado <> 'TRASPASADA') AS cuotas_plan,"
+                + " (SELECT COUNT(*) FROM pagos) AS cuotas_pagadas,"
+                + " (SELECT COUNT(*) FROM pagos)"
+                + " + (SELECT CAST(COALESCE(SUM(cuotas_pendientes), 0) AS SIGNED) FROM v_estado_cuenta WHERE estado <> 'TRASPASADA') AS cuotas_plan,"
                 + " (SELECT COUNT(*) FROM pagos WHERE NOT verificado) AS pagos_sin_verificar,"
                 + " (SELECT COUNT(*) FROM comprobantes WHERE estado_envio <> 'ENVIADO') AS comprobantes_sin_enviar,"
                 + " (SELECT COUNT(*) FROM ofertas WHERE estado = 'ACTIVA') AS ofertas_activas");
@@ -87,14 +89,15 @@ public class AdminController {
     }
 
     @PostMapping("/propietarios")
-    public ResponseEntity<Map<String, Object>> crearPropietario(@RequestBody(required = false) Map<String, Object> body) {
+    public ResponseEntity<Map<String, Object>> crearPropietario(@RequestBody(required = false) Map<String, Object> body,
+                                                                @RequestAttribute("user") SessionUser user) {
         Validate.only(body, "cedula", "nombre", "correo", "password");
         String cedula = Validate.text(body.get("cedula"), "La cédula", 5, 15, Validate.CEDULA, "La cédula debe tener solo números (5 a 15 dígitos).", false);
         String nombre = Validate.text(body.get("nombre"), "El nombre", 3, 120);
         String correo = Validate.text(body.get("correo"), "El correo", 5, 150, Validate.CORREO, "El correo no es válido.", false);
         String password = password(body.get("password"), true);
         // Propietario y cuenta de la comunidad en una sola transacción.
-        Integer id = tx.execute(st -> {
+        Integer id = Api.como(jdbc, tx, user, () -> {
             jdbc.update("INSERT INTO propietarios (cedula, nombre, correo) VALUES (?, ?, ?)", cedula, nombre, correo);
             Integer nuevo = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Integer.class);
             if (password != null) definirAcceso(nuevo, password);
@@ -105,22 +108,24 @@ public class AdminController {
 
     /** La cédula no se modifica; los pagos registrados no cambian. */
     @PutMapping("/propietarios/{id}")
-    public Map<String, Object> editarPropietario(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body) {
+    public Map<String, Object> editarPropietario(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body,
+                                                 @RequestAttribute("user") SessionUser user) {
         Validate.only(body, "nombre", "correo");
         String nombre = Validate.text(body.get("nombre"), "El nombre", 3, 120);
         String correo = Validate.text(body.get("correo"), "El correo", 5, 150, Validate.CORREO, "El correo no es válido.", false);
         if (Api.one(jdbc, "SELECT id FROM propietarios WHERE id = ?", id) == null) throw ApiException.notFound("El propietario no existe.");
-        jdbc.update("UPDATE propietarios SET nombre = ?, correo = ? WHERE id = ?", nombre, correo, id);
+        Api.como(jdbc, tx, user, () -> jdbc.update("UPDATE propietarios SET nombre = ?, correo = ? WHERE id = ?", nombre, correo, id));
         return Api.data(Api.one(jdbc, "SELECT id, cedula, nombre, correo FROM propietarios WHERE id = ?", id));
     }
 
     /** Crea o cambia la contraseña de la comunidad (usuario = cédula). */
     @PutMapping("/propietarios/{id}/acceso")
-    public Map<String, Object> acceso(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body) {
+    public Map<String, Object> acceso(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body,
+                                      @RequestAttribute("user") SessionUser user) {
         Validate.only(body, "password");
         String password = password(body.get("password"), false);
         if (Api.one(jdbc, "SELECT id FROM propietarios WHERE id = ?", id) == null) throw ApiException.notFound("El propietario no existe.");
-        return Api.data(definirAcceso(id, password));
+        return Api.data(Api.como(jdbc, tx, user, () -> definirAcceso(id, password)));
     }
 
     private Map<String, Object> definirAcceso(int propietarioId, String password) {
@@ -167,17 +172,19 @@ public class AdminController {
     }
 
     @PostMapping("/semanas")
-    public ResponseEntity<Map<String, Object>> crearSemana(@RequestBody(required = false) Map<String, Object> body) {
+    public ResponseEntity<Map<String, Object>> crearSemana(@RequestBody(required = false) Map<String, Object> body,
+                                                           @RequestAttribute("user") SessionUser user) {
         Object[] s = semana(body);
-        jdbc.update("INSERT INTO semanas (numero, fecha_checkin, fecha_checkout) VALUES (?, ?, ?)", s);
+        Api.como(jdbc, tx, user, () -> jdbc.update("INSERT INTO semanas (numero, fecha_checkin, fecha_checkout) VALUES (?, ?, ?)", s));
         return Api.created(Api.one(jdbc, "SELECT * FROM semanas WHERE numero = ?", s[0]));
     }
 
     @PutMapping("/semanas/{id}")
-    public Map<String, Object> editarSemana(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body) {
+    public Map<String, Object> editarSemana(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body,
+                                            @RequestAttribute("user") SessionUser user) {
         Object[] s = semana(body);
         if (Api.one(jdbc, "SELECT id FROM semanas WHERE id = ?", id) == null) throw ApiException.notFound("La semana no existe.");
-        jdbc.update("UPDATE semanas SET numero = ?, fecha_checkin = ?, fecha_checkout = ? WHERE id = ?", s[0], s[1], s[2], id);
+        Api.como(jdbc, tx, user, () -> jdbc.update("UPDATE semanas SET numero = ?, fecha_checkin = ?, fecha_checkout = ? WHERE id = ?", s[0], s[1], s[2], id));
         return Api.data(Api.one(jdbc, "SELECT * FROM semanas WHERE id = ?", id));
     }
 
@@ -192,9 +199,9 @@ public class AdminController {
     @PutMapping("/parametros")
     public Map<String, Object> guardarParametros(@RequestBody(required = false) Map<String, Object> body, @RequestAttribute("user") SessionUser user) {
         Validate.only(body, "valor_total", "num_cuotas", "valor_cuota");
-        jdbc.update("UPDATE parametros SET valor_total = ?, num_cuotas = ?, valor_cuota = ?, actualizado_en = NOW(), actualizado_por = ? WHERE id = 1",
-                Validate.money(body.get("valor_total"), "El valor total", false), Validate.integer(body.get("num_cuotas"), "El número de cuotas", 1, 120),
-                Validate.money(body.get("valor_cuota"), "El valor de la cuota", false), user.id());
+        Object[] v = {Validate.money(body.get("valor_total"), "El valor total", false), Validate.integer(body.get("num_cuotas"), "El número de cuotas", 1, 120),
+                Validate.money(body.get("valor_cuota"), "El valor de la cuota", false), user.id()};
+        Api.como(jdbc, tx, user, () -> jdbc.update("UPDATE parametros SET valor_total = ?, num_cuotas = ?, valor_cuota = ?, actualizado_en = NOW(), actualizado_por = ? WHERE id = 1", v));
         return parametros();
     }
 
@@ -226,9 +233,19 @@ public class AdminController {
     @PostMapping("/adquisiciones/{id}/traspaso")
     public ResponseEntity<Map<String, Object>> traspaso(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body,
                                                         @RequestAttribute("user") SessionUser user) {
-        Validate.only(body, "nuevo_propietario_id");
-        return Api.created(Api.one(jdbc, "CALL sp_cambiar_titular(?, ?, ?)", user.id(), id,
-                Validate.integer(body.get("nuevo_propietario_id"), "El nuevo titular", 1, Integer.MAX_VALUE)));
+        Validate.only(body, "nuevo_propietario_id", "modalidad");
+        return Api.created(Api.one(jdbc, "CALL sp_cambiar_titular(?, ?, ?, ?)", user.id(), id,
+                Validate.integer(body.get("nuevo_propietario_id"), "El nuevo titular", 1, Integer.MAX_VALUE),
+                Validate.oneOf(body.get("modalidad"), "La modalidad", "COMPRADOR_ASUME", "VENDEDOR_PAGA")));
+    }
+
+    /** Intercambio de semanas entre dos propietarios: cada uno recibe la semana del otro con su saldo pendiente. */
+    @PostMapping("/adquisiciones/{id}/intercambio")
+    public ResponseEntity<Map<String, Object>> intercambio(@PathVariable int id, @RequestBody(required = false) Map<String, Object> body,
+                                                           @RequestAttribute("user") SessionUser user) {
+        Validate.only(body, "otra_adquisicion_id");
+        return Api.created(Api.one(jdbc, "CALL sp_intercambiar_semanas(?, ?, ?)", user.id(), id,
+                Validate.integer(body.get("otra_adquisicion_id"), "La otra semana", 1, Integer.MAX_VALUE)));
     }
 
     /** Avance de una adquisición y siguiente cuota sin pago (para el formulario de pagos). */
