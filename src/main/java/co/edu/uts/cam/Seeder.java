@@ -36,7 +36,7 @@ public class Seeder implements ApplicationRunner {
         try {
             List<Map<String, Object>> pendientes = jdbc.queryForList("SELECT id, usuario, rol FROM usuarios WHERE password_hash = 'PENDIENTE'");
             for (Map<String, Object> u : pendientes) {
-                String pass = "ADMIN".equals(u.get("rol")) ? admin : "propietario".equals(u.get("usuario")) ? propietario : propietarios;
+                String pass = !"PROPIETARIO".equals(u.get("rol")) ? admin : "propietario".equals(u.get("usuario")) ? propietario : propietarios;
                 if (pass == null || pass.length() < Passwords.MIN) continue;
                 jdbc.update("UPDATE usuarios SET password_hash = ? WHERE id = ? AND password_hash = 'PENDIENTE'", Passwords.hash(pass), u.get("id"));
             }

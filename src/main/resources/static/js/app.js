@@ -8,12 +8,17 @@ const MENUS = {
     ['inicio', 'Inicio', 'home'], ['propietarios', 'Propietarios', 'users'], ['semanas', 'Semanas', 'calendar'],
     ['asignaciones', 'Asignaciones', 'key'], ['pagos', 'Pagos de cuotas', 'cash'], ['comprobantes', 'Comprobantes', 'receipt'],
     ['estado-cuenta', 'Estado de cuenta', 'chart'], ['recaudo', 'Recaudo mensual', 'clock'], ['comunidad', 'Comunidad', 'chat'],
-    ['parametros', 'Parámetros', 'gear'],
+    ['parametros', 'Parámetros', 'gear'], ['acerca', 'Acerca del proyecto', 'info'],
   ],
-  PROPIETARIO: [['ofertas', 'Ofertas activas', 'home'], ['publicar', 'Publicar oferta', 'plus'], ['mis-ofertas', 'Mis ofertas', 'chat']],
+  PROPIETARIO: [['ofertas', 'Ofertas activas', 'home'], ['publicar', 'Publicar oferta', 'plus'], ['mis-ofertas', 'Mis ofertas', 'chat'],
+    ['acerca', 'Acerca del proyecto', 'info']],
 };
+// El superadministrador ve todo lo de ADMIN más las cuentas de administradores y el historial de cambios.
+MENUS.SUPERADMIN = [...MENUS.ADMIN.slice(0, -1), ['usuarios', 'Administradores', 'shield'], ['historial', 'Historial de cambios', 'clock'],
+  MENUS.ADMIN.at(-1)];
+const ROLES = { SUPERADMIN: 'Superadministrador', ADMIN: 'Secretaria · Administración', PROPIETARIO: 'Propietario' };
 // Rutas internas que no aparecen en el menú.
-const EXTRA = { ADMIN: ['comprobante'], PROPIETARIO: [] };
+const EXTRA = { SUPERADMIN: ['comprobante'], ADMIN: ['comprobante'], PROPIETARIO: [] };
 
 const shell = document.getElementById('shell');
 const main = document.getElementById('main');
@@ -45,7 +50,7 @@ function buildSidebar() {
     nav,
     h('div', { class: 'user-box' },
       h('div', { class: 'avatar', 'aria-hidden': 'true' }, initials),
-      h('div', { class: 'who' }, h('b', {}, user.nombre), h('span', {}, user.rol === 'ADMIN' ? 'Secretaria · Administración' : 'Propietario')),
+      h('div', { class: 'who' }, h('b', {}, user.nombre), h('span', {}, ROLES[user.rol])),
       h('button', { class: 'icon-btn', type: 'button', title: 'Cerrar sesión', 'aria-label': 'Cerrar sesión', onclick: logout }, icon('logout'))));
   menuBtn.append(icon('menu'));
   menuBtn.addEventListener('click', () => toggleMenu(!shell.classList.contains('menu-open')));

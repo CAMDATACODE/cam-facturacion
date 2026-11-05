@@ -103,13 +103,16 @@ DELIMITER $$
 
 DROP PROCEDURE IF EXISTS sp_exigir_usuario$$
 -- Exige un usuario activo con el rol indicado (NULL = cualquiera). Devuelve su rol y propietario.
+-- SUPERADMIN puede hacer todo lo de ADMIN.
+-- Fija @app_usuario_id: los triggers de auditoría (05) registran a este usuario como autor del cambio.
 CREATE PROCEDURE sp_exigir_usuario(IN p_usuario_id INT, IN p_rol VARCHAR(12), OUT o_rol VARCHAR(12), OUT o_propietario_id INT)
 BEGIN
   SET o_rol = NULL, o_propietario_id = NULL;
   SELECT rol, propietario_id INTO o_rol, o_propietario_id FROM usuarios WHERE id = p_usuario_id AND activo;
-  IF o_rol IS NULL OR (p_rol IS NOT NULL AND o_rol <> p_rol) THEN
+  IF o_rol IS NULL OR (p_rol IS NOT NULL AND o_rol <> p_rol AND NOT (p_rol = 'ADMIN' AND o_rol = 'SUPERADMIN')) THEN
     SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5403, MESSAGE_TEXT = 'No tiene permiso para esta operación.';
   END IF;
+  SET @app_usuario_id = p_usuario_id;
 END$$
 
 DROP PROCEDURE IF EXISTS sp_actualizar_estado_adquisicion$$
@@ -150,18 +153,25 @@ BEGIN
   COMMIT;
 END$$
 
-DROP PROCEDURE IF EXISTS sp_cambiar_titular$$
--- PENDIENTE DE CONFIRMAR CON CAM: la adquisición anterior queda TRASPASADA con sus pagos
--- y el nuevo titular recibe una adquisición con las mismas condiciones y fecha de inicio.
-CREATE PROCEDURE sp_cambiar_titular(IN p_usuario_id INT, IN p_adquisicion_id INT, IN p_nuevo_propietario_id INT)
+DROP PROCEDURE IF EXISTS sp_traspasar$$
+-- Interno, sin transacción propia: lo usan sp_cambiar_titular y sp_intercambiar_semanas.
+-- La deuda sigue a la semana: la adquisición anterior queda TRASPASADA con sus pagos (historial del vendedor)
+-- y el nuevo titular recibe un plan con lo que falta: las cuotas pendientes y el saldo.
+-- Modalidades (requieren 05_superadmin_auditoria_traspasos.sql):
+--   COMPRADOR_ASUME: el vendedor debe estar al día (sin cuotas vencidas); el comprador paga las cuotas restantes.
+--   VENDEDOR_PAGA:   el vendedor debe tener la acción pagada por completo (paz y salvo) antes del traspaso.
+CREATE PROCEDURE sp_traspasar(IN p_usuario_id INT, IN p_adquisicion_id INT, IN p_nuevo_propietario_id INT,
+                              IN p_modalidad VARCHAR(20), OUT o_id INT)
 BEGIN
-  DECLARE v_rol VARCHAR(12);
-  DECLARE v_prop INT;
   DECLARE v_estado VARCHAR(12);
   DECLARE v_actual INT;
-  DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
-  CALL sp_exigir_usuario(p_usuario_id, 'ADMIN', v_rol, v_prop);
-  START TRANSACTION;
+  DECLARE v_pend INT;
+  DECLARE v_saldo DECIMAL(14,2);
+  DECLARE v_inicio DATE;
+  DECLARE v_msg VARCHAR(200);
+  IF p_modalidad IS NULL OR p_modalidad NOT IN ('COMPRADOR_ASUME', 'VENDEDOR_PAGA') THEN
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5400, MESSAGE_TEXT = 'La modalidad debe ser COMPRADOR_ASUME o VENDEDOR_PAGA.';
+  END IF;
   SELECT estado, propietario_id INTO v_estado, v_actual FROM adquisiciones WHERE id = p_adquisicion_id FOR UPDATE;
   IF v_estado IS NULL THEN
     SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5404, MESSAGE_TEXT = 'La adquisición no existe.';
@@ -175,13 +185,75 @@ BEGIN
   IF p_nuevo_propietario_id = v_actual THEN
     SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5400, MESSAGE_TEXT = 'El nuevo titular debe ser otro propietario.';
   END IF;
+  SELECT cuotas_pendientes, saldo INTO v_pend, v_saldo FROM v_estado_cuenta WHERE adquisicion_id = p_adquisicion_id;
+  IF p_modalidad = 'VENDEDOR_PAGA' AND (v_pend > 0 OR v_saldo > 0) THEN
+    SET v_msg = CONCAT('El titular actual debe pagar las ', v_pend, ' cuotas pendientes antes del traspaso (paz y salvo).');
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5409, MESSAGE_TEXT = v_msg;
+  END IF;
+  IF EXISTS (SELECT 1 FROM v_cuotas WHERE adquisicion_id = p_adquisicion_id AND estado = 'VENCIDA') THEN
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5409,
+      MESSAGE_TEXT = 'La semana tiene cuotas vencidas sin pagar. El titular actual debe ponerse al día antes del traspaso.';
+  END IF;
+  -- El plan del nuevo titular continúa desde el vencimiento de la primera cuota sin pagar.
+  SELECT MIN(vence) INTO v_inicio FROM v_cuotas WHERE adquisicion_id = p_adquisicion_id AND estado <> 'PAGADA';
   UPDATE adquisiciones SET estado = 'TRASPASADA' WHERE id = p_adquisicion_id;
   UPDATE ofertas SET estado = 'CONCRETADA', cerrada_en = NOW() WHERE adquisicion_id = p_adquisicion_id AND estado = 'ACTIVA';
-  INSERT INTO adquisiciones (propietario_id, semana_id, fecha_inicio, valor_total, num_cuotas, valor_cuota, usuario_id)
-  SELECT p_nuevo_propietario_id, semana_id, fecha_inicio, valor_total, num_cuotas, valor_cuota, p_usuario_id
+  INSERT INTO adquisiciones (propietario_id, semana_id, fecha_inicio, valor_total, num_cuotas, valor_cuota, estado,
+                             adquisicion_origen_id, usuario_id)
+  SELECT p_nuevo_propietario_id, semana_id, COALESCE(v_inicio, DATE(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '-05:00'))),
+         GREATEST(v_saldo, 0), v_pend, valor_cuota, IF(v_pend = 0, 'PAGADA', 'ACTIVA'), id, p_usuario_id
   FROM adquisiciones WHERE id = p_adquisicion_id;
-  SELECT LAST_INSERT_ID() AS id;
+  SET o_id = LAST_INSERT_ID();
+END$$
+
+DROP PROCEDURE IF EXISTS sp_cambiar_titular$$
+-- Venta o cesión de una semana a otro propietario. Ver reglas en sp_traspasar.
+CREATE PROCEDURE sp_cambiar_titular(IN p_usuario_id INT, IN p_adquisicion_id INT, IN p_nuevo_propietario_id INT,
+                                    IN p_modalidad VARCHAR(20))
+BEGIN
+  DECLARE v_rol VARCHAR(12);
+  DECLARE v_prop INT;
+  DECLARE v_id INT;
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
+  CALL sp_exigir_usuario(p_usuario_id, 'ADMIN', v_rol, v_prop);
+  START TRANSACTION;
+  CALL sp_traspasar(p_usuario_id, p_adquisicion_id, p_nuevo_propietario_id, p_modalidad, v_id);
   COMMIT;
+  SELECT v_id AS id;
+END$$
+
+DROP PROCEDURE IF EXISTS sp_intercambiar_semanas$$
+-- Intercambio entre dos propietarios en una sola transacción: cada uno recibe la semana del otro
+-- con su saldo pendiente. Ambos deben estar al día.
+CREATE PROCEDURE sp_intercambiar_semanas(IN p_usuario_id INT, IN p_adquisicion_a INT, IN p_adquisicion_b INT)
+BEGIN
+  DECLARE v_rol VARCHAR(12);
+  DECLARE v_prop INT;
+  DECLARE v_dueno_a INT;
+  DECLARE v_dueno_b INT;
+  DECLARE v_nueva_a INT;
+  DECLARE v_nueva_b INT;
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END;
+  CALL sp_exigir_usuario(p_usuario_id, 'ADMIN', v_rol, v_prop);
+  IF p_adquisicion_a IS NULL OR p_adquisicion_b IS NULL OR p_adquisicion_a = p_adquisicion_b THEN
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5400, MESSAGE_TEXT = 'Seleccione dos semanas distintas.';
+  END IF;
+  START TRANSACTION;
+  -- Bloqueo en orden de id para evitar interbloqueos entre dos intercambios simultáneos.
+  SELECT propietario_id INTO v_prop FROM adquisiciones WHERE id = LEAST(p_adquisicion_a, p_adquisicion_b) FOR UPDATE;
+  SELECT propietario_id INTO v_prop FROM adquisiciones WHERE id = GREATEST(p_adquisicion_a, p_adquisicion_b) FOR UPDATE;
+  SELECT propietario_id INTO v_dueno_a FROM adquisiciones WHERE id = p_adquisicion_a;
+  SELECT propietario_id INTO v_dueno_b FROM adquisiciones WHERE id = p_adquisicion_b;
+  IF v_dueno_a IS NULL OR v_dueno_b IS NULL THEN
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5404, MESSAGE_TEXT = 'La adquisición no existe.';
+  END IF;
+  IF v_dueno_a = v_dueno_b THEN
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO = 5400, MESSAGE_TEXT = 'Las dos semanas son del mismo propietario.';
+  END IF;
+  CALL sp_traspasar(p_usuario_id, p_adquisicion_a, v_dueno_b, 'COMPRADOR_ASUME', v_nueva_a);
+  CALL sp_traspasar(p_usuario_id, p_adquisicion_b, v_dueno_a, 'COMPRADOR_ASUME', v_nueva_b);
+  COMMIT;
+  SELECT v_nueva_a AS id_a, v_nueva_b AS id_b;
 END$$
 
 -- ---------------------------------------------------------------------

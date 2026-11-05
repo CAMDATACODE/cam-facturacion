@@ -3,8 +3,10 @@ package co.edu.uts.cam;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Respuestas JSON del contrato y consultas de uso común. */
 public final class Api {
@@ -51,6 +53,17 @@ public final class Api {
     public static String like(String q) {
         String s = q == null ? "" : q.trim();
         return "%" + s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
+    /**
+     * Escritura directa (sin procedimiento) atribuida al usuario de la sesión: fija @app_usuario_id
+     * en la misma conexión, dentro de una transacción, para que los triggers de auditoría registren al autor.
+     */
+    public static <T> T como(JdbcTemplate jdbc, TransactionTemplate tx, SessionUser user, Supplier<T> work) {
+        return tx.execute(st -> {
+            jdbc.update("SET @app_usuario_id = ?", user.id());
+            return work.get();
+        });
     }
 
     /** 0/1 de MySQL o Boolean a boolean. */

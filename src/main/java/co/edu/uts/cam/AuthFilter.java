@@ -11,14 +11,23 @@ import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
  * Protege /api: exige sesión (401), token CSRF en escrituras (403) y rol (403).
  * El propietario solo llega a /api/auth, /api/ofertas y /api/mis-semanas (FUN-SEG-03).
+ * /api/usuarios y /api/auditoria son solo del SUPERADMIN.
  */
 @Component
 public class AuthFilter implements Filter {
+
+    private final JdbcTemplate jdbc;
+
+    public AuthFilter(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
@@ -40,6 +49,19 @@ public class AuthFilter implements Filter {
             error(res, 401, "SIN_SESION", "Inicie sesión para continuar.");
             return;
         }
+        // Una cuenta desactivada pierde el acceso de inmediato, aunque tenga una sesión abierta.
+        Boolean activo;
+        try {
+            activo = jdbc.query("SELECT activo FROM usuarios WHERE id = ?", rs -> rs.next() && rs.getBoolean(1), user.id());
+        } catch (DataAccessException e) {
+            error(res, 503, "SIN_BASE_DE_DATOS", "El servicio no está disponible en este momento.");
+            return;
+        }
+        if (!Boolean.TRUE.equals(activo)) {
+            session.invalidate();
+            error(res, 401, "SIN_SESION", "Su cuenta fue desactivada.");
+            return;
+        }
         String method = req.getMethod();
         if (!method.equals("GET") && !method.equals("HEAD")) {
             String expected = (String) session.getAttribute("csrf");
@@ -52,7 +74,8 @@ public class AuthFilter implements Filter {
         }
         boolean comunidad = path.startsWith("/api/auth/") || path.equals("/api/ofertas") || path.startsWith("/api/ofertas/")
                 || path.equals("/api/mis-semanas");
-        if (!comunidad && !user.admin()) {
+        boolean superadmin = path.startsWith("/api/usuarios") || path.startsWith("/api/auditoria");
+        if ((!comunidad && !user.admin()) || (superadmin && !user.superadmin())) {
             error(res, 403, "SIN_PERMISO", "No tiene permiso para esta operación.");
             return;
         }

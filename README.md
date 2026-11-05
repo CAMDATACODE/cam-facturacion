@@ -16,6 +16,12 @@ En MySQL Workbench, abra cada archivo con *File → Open SQL Script…* y ejecú
 2. `database/02_procedimientos.sql`. Crea las vistas y los procedimientos.
 3. `database/03_datos_prueba.sql`. Carga 50 propietarios, 52 semanas, pagos, comprobantes, ofertas y mensajes, todos ficticios.
 4. (Opcional, para producción) `database/04_permisos.sql`. Crea el usuario `cam_app` con permisos mínimos. Cambie su contraseña antes de ejecutarlo.
+5. `database/05_superadmin_auditoria_traspasos.sql`. Agrega el rol SUPERADMIN, el historial de cambios (tabla `auditoria` y triggers) y los traspasos con saldo. Se ejecuta **una sola vez**.
+
+**Base ya publicada (Aiven, base `defaultdb`)**: no ejecute 01 ni 03 (borran o duplican datos). Seleccione la base y ejecute, en orden:
+1. `05_superadmin_auditoria_traspasos.sql`.
+2. `02_procedimientos.sql`, cambiando antes `USE cam_facturacion;` por `USE defaultdb;`.
+3. Vuelva a publicar la aplicación (Push a GitHub). La base y la aplicación deben actualizarse juntas: la API nueva llama a `sp_cambiar_titular` con 4 parámetros.
 
 Para comprobar que quedó bien: `SELECT COUNT(*) FROM cam_facturacion.pagos;` debe dar 334.
 
@@ -31,7 +37,7 @@ Para comprobar que quedó bien: `SELECT COUNT(*) FROM cam_facturacion.pagos;` de
 
 | Rol | Usuario | Contraseña |
 |---|---|---|
-| Secretaria | `admin` | `1234` |
+| Superadministradora (Marta Lucía Prada) | `admin` | `1234` |
 | Propietario (Helena Pérez Gómez, semana 5, con ofertas y mensajes) | `propietario` | `12345` |
 | Los demás propietarios | su cédula | `12345` |
 
@@ -84,7 +90,22 @@ Railway, por ejemplo, ofrece las dos cosas y publica desde GitHub. Revisen sus p
    3. Recargue la página y verifique que los datos persisten.
 5. Cada *Push* a GitHub vuelve a publicar la aplicación automáticamente.
 
-## 5. Requerimientos de PSI y dónde están
+## 5. Roles, historial y traspasos
+
+| Rol | Puede |
+|---|---|
+| `SUPERADMIN` | Todo lo de ADMIN. Además crea, activa o desactiva administradores y les cambia la contraseña (*Administradores*) y consulta el *Historial de cambios*. |
+| `ADMIN` | Propietarios, semanas, asignaciones, pagos, comprobantes, estados de cuenta, recaudo, comunidad y parámetros. |
+| `PROPIETARIO` | Solo la comunidad (ofertas y mensajes). |
+
+**Historial de cambios.** Triggers de MySQL guardan en `auditoria` cada alta, cambio o borrado de propietarios, usuarios, semanas, parámetros, asignaciones, pagos, comprobantes, ofertas y mensajes: valor anterior, valor nuevo, fecha y autor. El autor llega en `@app_usuario_id`: lo fija `sp_exigir_usuario` en cada procedimiento y `Api.como(...)` antes de cada escritura directa desde Java. **Toda escritura nueva desde Java debe ir dentro de `Api.como`**; si no, quedaría atribuida al último usuario de esa conexión.
+
+**Venta e intercambio de semanas.** La deuda sigue a la semana. Al traspasar, la adquisición anterior queda `TRASPASADA` con sus pagos y el nuevo titular recibe un plan solo con las cuotas que faltan (`adquisicion_origen_id` apunta a la anterior). El vendedor no puede tener cuotas vencidas. Modalidades:
+- `COMPRADOR_ASUME`: el comprador paga las cuotas restantes.
+- `VENDEDOR_PAGA`: el vendedor debe tener la acción pagada por completo (paz y salvo) antes del traspaso.
+- Intercambio (`sp_intercambiar_semanas`): cada propietario recibe la semana del otro con su saldo, en una sola transacción.
+
+## 6. Requerimientos de PSI y dónde están
 
 | Requerimiento | Pantalla | API (Java) | MySQL |
 |---|---|---|---|
@@ -111,10 +132,10 @@ Errores de negocio: los procedimientos usan `SIGNAL ... MYSQL_ERRNO`, y la API l
 - 5404 → 404
 - 5409 → 409
 
-## 6. Pendiente o por confirmar
+## 7. Pendiente o por confirmar
 
 - **Motor de base de datos.** La guía y el documento de PSI dicen PostgreSQL; este proyecto usa MySQL. Hay que informarlo a la profesora y actualizar RNF-POR-01.
-- **Cambio de titular.** El comprador inicia un plan nuevo con las mismas condiciones. Falta confirmar con CAM si hereda las cuotas pagadas.
+- **Cambio de titular.** Implementado: la deuda sigue a la semana y el comprador paga solo lo que falta (ver sección 5). Falta que CAM confirme la modalidad por defecto y si exige paz y salvo.
 - **Vencimiento.** Se asume que la cuota *k* vence en el mes (inicio del plan + *k* − 1).
 - **Correo.** Se abre el programa de correo del equipo y se registra si se envió o falló. El envío automático requiere SMTP.
 - **Excel.** La exportación es CSV (Excel lo abre). Si exigen `.xlsx`, hay que agregar una librería.

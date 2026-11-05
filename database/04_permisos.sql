@@ -32,3 +32,4 @@ GRANT EXECUTE ON PROCEDURE cam_facturacion.sp_publicar_oferta TO 'cam_app'@'%';
 GRANT EXECUTE ON PROCEDURE cam_facturacion.sp_cerrar_oferta TO 'cam_app'@'%';
 GRANT EXECUTE ON PROCEDURE cam_facturacion.sp_eliminar_oferta TO 'cam_app'@'%';
 GRANT EXECUTE ON PROCEDURE cam_facturacion.sp_enviar_mensaje TO 'cam_app'@'%';
+GRANT EXECUTE ON PROCEDURE cam_facturacion.sp_intercambiar_semanas TO 'cam_app'@'%';
