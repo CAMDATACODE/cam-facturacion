@@ -1,6 +1,6 @@
 // FUN-EDC-01: estado de cuenta por propietario (abonado, cuotas pagadas y pendientes, saldo).
-import { api, apiAll } from '../api.js';
-import { h, pageHead, select, setOptions, btn, kpi, dataTable, exportCsv, money, col } from '../ui.js';
+import { api, apiAll, apiUpload } from '../api.js';
+import { h, pageHead, select, setOptions, btn, kpi, dataTable, exportCsv, money, col, dialog, toast, busy } from '../ui.js';
 
 export default async function estadoCuenta(root) {
   const propietario = select([{ value: '', label: '— Todos los propietarios —' }], { 'aria-label': 'Propietario', style: { width: 'min(340px, 100%)' } });
@@ -23,8 +23,14 @@ export default async function estadoCuenta(root) {
   const host = h('div', {});
   let table;
 
+  // Importar pagos desde Excel (.xlsx) o CSV.
+  const archivo = h('input', { type: 'file', accept: '.xlsx,.csv', hidden: true, 'aria-label': 'Archivo a importar' });
+  const importar = btn('Importar', { icon: 'upload', onclick: abrirImportar });
+  archivo.addEventListener('change', subir);
+
   root.append(
-    pageHead('Estado de cuenta', 'Avance de pago de la acción de cada propietario', propietario,
+    archivo,
+    pageHead('Estado de cuenta', 'Avance de pago de la acción de cada propietario', propietario, importar,
       btn('Exportar', { icon: 'download', onclick: () => exportCsv('estado_de_cuenta', propietario.value ? cuotaCols : resumenCols, filas) })),
     h('div', { class: 'kpis' }, Object.values(k).map((x) => x.el)),
     h('section', { class: 'card' }, h('div', { class: 'card-head' }, titulo), host),
@@ -51,6 +57,49 @@ export default async function estadoCuenta(root) {
     await table.reload();
   }
   propietario.addEventListener('change', load);
+
+  async function abrirImportar() {
+    const info = h('div', {},
+      h('p', {}, 'Cargue un archivo .xlsx o .csv con un pago por fila. La primera fila debe tener estos encabezados:'),
+      h('p', { style: { fontFamily: 'monospace', fontSize: '13px' } }, 'cedula · semana · cuota · fecha_pago · valor · verificado'),
+      h('p', { class: 'hint' }, 'Fecha: AAAA-MM-DD o DD/MM/AAAA. Valor: 750000 o 750.000. Verificado (opcional): Sí/No; si se deja vacío el pago queda sin verificar. '
+        + 'Las cuotas ya registradas se omiten, por lo que puede volver a cargar el mismo archivo sin duplicar pagos.'));
+    const r = await dialog('Importar pagos', info, [
+      { label: 'Cancelar', value: null }, { label: 'Descargar plantilla', value: 'plantilla' }, { label: 'Elegir archivo', value: 'archivo', kind: 'primary' }]);
+    if (r === 'plantilla') plantilla();
+    if (r === 'archivo') archivo.click();
+  }
+
+  function plantilla() {
+    const csv = '\uFEFFcedula;semana;cuota;fecha_pago;valor;verificado\r\n1234567890;1;1;2026-11-05;750000;Sí\r\n';
+    const a = h('a', { href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })), download: 'plantilla_importar_pagos.csv' });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  async function subir() {
+    const file = archivo.files[0];
+    archivo.value = '';
+    if (!file) return;
+    await busy(importar, async () => {
+      try {
+        toast(`Importando ${file.name}…`);
+        const { data: r } = await apiUpload('/estado-cuenta/importar', file);
+        const lista = r.errores.length
+          ? h('ul', { style: { maxHeight: '180px', overflowY: 'auto', paddingLeft: '18px', fontSize: '13px' } },
+            r.errores.map((e) => h('li', {}, `Fila ${e.fila}: ${e.mensaje}`)),
+            r.errores_truncados ? h('li', {}, 'Hay más errores; corrija estos y vuelva a cargar el archivo.') : null)
+          : null;
+        await dialog('Resultado de la importación', h('div', {},
+          h('p', {}, `Filas leídas: ${r.filas}. Pagos importados: ${r.importadas}. Omitidos (ya registrados): ${r.omitidas}. Con error: ${r.con_error}.`),
+          lista), [{ label: 'Cerrar', value: true, kind: 'primary' }]);
+        await load();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    });
+  }
 
   const owners = await apiAll('/propietarios');
   setOptions(propietario, [{ value: '', label: '— Todos los propietarios —' }, ...owners.map((p) => ({ value: p.id, label: `${p.nombre} — ${p.cedula}` }))]);
