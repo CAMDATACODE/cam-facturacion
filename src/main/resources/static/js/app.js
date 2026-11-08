@@ -7,7 +7,7 @@ const MENUS = {
   ADMIN: [
     ['inicio', 'Inicio', 'home'], ['propietarios', 'Propietarios', 'users'], ['semanas', 'Semanas', 'calendar'],
     ['asignaciones', 'Asignaciones', 'key'], ['pagos', 'Pagos de cuotas', 'cash'], ['comprobantes', 'Comprobantes', 'receipt'],
-    ['estado-cuenta', 'Estado de cuenta', 'chart'], ['recaudo', 'Recaudo mensual', 'clock'], ['comunidad', 'Comunidad', 'chat'],
+    ['estado-cuenta', 'Estado de cuenta', 'chart'], ['recaudo', 'Recaudo mensual', 'clock'],
     ['parametros', 'Parámetros', 'gear'], ['acerca', 'Acerca del proyecto', 'info'],
   ],
   PROPIETARIO: [['ofertas', 'Ofertas activas', 'home'], ['publicar', 'Publicar oferta', 'plus'], ['mis-ofertas', 'Mis ofertas', 'chat'],

@@ -11,7 +11,7 @@ export default async function acerca(root) {
       card('Equipo de desarrollo', h('ul', {}, EQUIPO.map((n) => h('li', {}, n)))),
       card('Institución',
         dato('Universidad', 'Unidades Tecnológicas de Santander (UTS)'),
-        dato('Programa', 'Tecnólogo en Desarrollo de Sistemas Informáticos'),
+        dato('Programa', 'Tecnología en Desarrollo de Sistemas Informáticos'),
         dato('Asignaturas', 'Planeación de Sistemas Informáticos · Motores de Base de Datos'),
         dato('Docentes', 'Elsa Patricia Carvajal Valero · Laura Cristina Duarte Quintero'),
         dato('Lugar y año', 'Bucaramanga, Santander · 2026')),
