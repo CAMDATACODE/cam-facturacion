@@ -73,6 +73,11 @@ public class ErrorHandler {
         };
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> tooBig(Exception e) {
+        return body(413, "ARCHIVO_GRANDE", "El archivo supera el tamaño máximo permitido (5 MB).");
+    }
+
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     public ResponseEntity<Map<String, Object>> badInput(Exception e) {
         return body(400, "ENTRADA_INVALIDA", "La solicitud tiene un formato inválido.");

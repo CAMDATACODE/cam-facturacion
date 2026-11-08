@@ -20,6 +20,7 @@ const P = {
   print: 'M7 3h10v5H7zM3 8h18v9H3zM7 14h10v7H7z',
   mail: 'M3 5h18v14H3zM3 7l9 6 9-6',
   download: 'M12 3v12M7 10l5 5 5-5M4 20h16',
+  upload: 'M12 15V3M7 8l5-5 5 5M4 20h16',
   edit: 'M4 20v-4L16 4l4 4L8 20zM13 7l4 4',
   swap: 'M4 8h16M16 4l4 4-4 4M20 16H4M8 12l-4 4 4 4',
   send: 'M3 11l18-8-7 18-3-8z',

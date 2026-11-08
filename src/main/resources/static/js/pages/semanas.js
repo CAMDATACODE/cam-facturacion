@@ -26,12 +26,16 @@ export default async function semanas(root) {
   const checkout = input({ type: 'date' });
   const error = h('p', { class: 'form-error', role: 'alert' });
   const guardar = btn('Guardar', { icon: 'check', kind: 'primary', type: 'submit' });
-  // Al elegir el check-in se proponen 7 noches.
-  checkin.addEventListener('change', () => {
-    if (!editId && checkin.value) checkout.value = addDays(checkin.value, 7);
-  });
+  // Las noches siempre se calculan con las fechas elegidas; no hay un valor fijo.
+  const noches = h('div', { class: 'muted' }, ' ');
+  const showNoches = () => {
+    const n = diffDays(checkin.value, checkout.value);
+    noches.textContent = n === null ? ' ' : n > 0 ? `Noches: ${n}` : 'El check-out debe ser posterior al check-in.';
+  };
+  checkin.addEventListener('change', showNoches);
+  checkout.addEventListener('change', showNoches);
   const form = h('form', { novalidate: true, onsubmit: save },
-    field('Número de semana', numero), field('Fecha de check-in', checkin), field('Fecha de check-out', checkout),
+    field('Número de semana', numero), field('Fecha de check-in', checkin), field('Fecha de check-out', checkout), noches,
     error, h('div', { class: 'form-actions' }, guardar, btn('Nueva', { icon: 'plus', onclick: reset })));
 
   root.append(
@@ -46,6 +50,7 @@ export default async function semanas(root) {
     editId = null;
     form.reset();
     error.textContent = '';
+    noches.textContent = ' ';
     title.textContent = 'Nueva semana';
     table.select(null);
     const max = Math.max(0, ...table.rows().map((r) => r.numero));
@@ -59,6 +64,7 @@ export default async function semanas(root) {
     checkout.value = row.fecha_checkout;
     title.textContent = `Editar semana ${row.numero}`;
     error.textContent = '';
+    showNoches();
     table.select(row.id);
   }
 
@@ -84,8 +90,8 @@ export default async function semanas(root) {
   reset();
 }
 
-function addDays(iso, n) {
-  const d = new Date(`${iso}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
+/** Noches entre dos fechas AAAA-MM-DD; null si falta alguna. */
+function diffDays(from, to) {
+  if (!from || !to) return null;
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
 }

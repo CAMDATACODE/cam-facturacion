@@ -23,6 +23,10 @@ export async function api(path, { method = 'GET', body, query } = {}) {
   } catch {
     throw new ApiFailure(0, 'SIN_CONEXION', 'No hay conexión con el servidor. Revise su internet e intente de nuevo.');
   }
+  return leer(res, path);
+}
+
+async function leer(res, path) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     // Sesión vencida: volver al ingreso.
@@ -30,6 +34,21 @@ export async function api(path, { method = 'GET', body, query } = {}) {
     throw new ApiFailure(res.status, json.error?.codigo || 'ERROR', json.error?.mensaje || 'Ocurrió un error inesperado.');
   }
   return json;
+}
+
+/** Sube un archivo (multipart, campo "archivo"). El navegador pone el Content-Type con su boundary. */
+export async function apiUpload(path, file) {
+  const form = new FormData();
+  form.append('archivo', file);
+  const headers = { Accept: 'application/json' };
+  if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+  let res;
+  try {
+    res = await fetch(new URL(`/api${path}`, location.origin), { method: 'POST', headers, body: form, credentials: 'same-origin' });
+  } catch {
+    throw new ApiFailure(0, 'SIN_CONEXION', 'No hay conexión con el servidor. Revise su internet e intente de nuevo.');
+  }
+  return leer(res, path);
 }
 
 /** Recorre todas las páginas de una lista (máximo 100 por solicitud). */

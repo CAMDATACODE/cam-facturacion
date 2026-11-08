@@ -23,6 +23,11 @@
     </properties>
 
     <dependencies>
+        <dependency>
+    <groupId>org.apache.poi</groupId>
+    <artifactId>poi-ooxml</artifactId>
+    <version>5.5.1</version>
+</dependency>
         <!-- API REST y archivos estáticos (las pantallas web) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
