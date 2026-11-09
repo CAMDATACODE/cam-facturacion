@@ -23,6 +23,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuthFilter implements Filter {
 
+    private record Cuenta(boolean activo, String rol, String usuario, String nombre) { }
+
     private final JdbcTemplate jdbc;
 
     public AuthFilter(JdbcTemplate jdbc) {
@@ -49,18 +51,24 @@ public class AuthFilter implements Filter {
             error(res, 401, "SIN_SESION", "Inicie sesión para continuar.");
             return;
         }
-        // Una cuenta desactivada pierde el acceso de inmediato, aunque tenga una sesión abierta.
-        Boolean activo;
+        // Una cuenta desactivada o eliminada pierde el acceso de inmediato, y un cambio de rol rige desde la siguiente solicitud
+        // (el rol de la sesión nunca se toma como definitivo: se vuelve a leer de la base).
+        Cuenta cuenta;
         try {
-            activo = jdbc.query("SELECT activo FROM usuarios WHERE id = ?", rs -> rs.next() && rs.getBoolean(1), user.id());
+            cuenta = jdbc.query("SELECT activo, rol, usuario, nombre FROM usuarios WHERE id = ?",
+                    rs -> rs.next() ? new Cuenta(rs.getBoolean(1), rs.getString(2), rs.getString(3), rs.getString(4)) : null, user.id());
         } catch (DataAccessException e) {
             error(res, 503, "SIN_BASE_DE_DATOS", "El servicio no está disponible en este momento.");
             return;
         }
-        if (!Boolean.TRUE.equals(activo)) {
+        if (cuenta == null || !cuenta.activo()) {
             session.invalidate();
             error(res, 401, "SIN_SESION", "Su cuenta fue desactivada.");
             return;
+        }
+        if (!cuenta.rol().equals(user.rol()) || !cuenta.usuario().equals(user.usuario()) || !cuenta.nombre().equals(user.nombre())) {
+            user = new SessionUser(user.id(), cuenta.usuario(), cuenta.nombre(), cuenta.rol(), user.propietarioId());
+            session.setAttribute("user", user);
         }
         String method = req.getMethod();
         if (!method.equals("GET") && !method.equals("HEAD")) {
